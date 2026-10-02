@@ -26,13 +26,22 @@ jobs:
     # Don't run the schedule on forks.
     if: ${{ github.repository == 'Mikompilation/MikuPan' }}
     runs-on: windows-latest
+    outputs:
+      sha: ${{ steps.built.outputs.sha }}
 
     steps:
+      # Scheduled runs have no inputs, so the fallback keeps them on main.
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ inputs.ref || 'main' }}
           submodules: 'recursive'
           fetch-depth: 0   # full history + tags so the version header resolves
+
+      # Pin the exact commit so every platform builds (and the tag points at) the same thing.
+      - name: Resolve commit
+        id: built
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up MSYS2 (Windows)
         uses: msys2/setup-msys2@v2
@@ -82,10 +91,9 @@ jobs:
         shell: ${{ matrix.sys.shell }}
 
     steps:
-      # Scheduled runs have no inputs, so the fallback keeps them on main.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || 'main' }}
+          ref: ${{ needs.shaders.outputs.sha }}
           submodules: 'recursive'
           fetch-depth: 0   # full history + tags so the version header resolves
 
@@ -149,22 +157,94 @@ jobs:
         run: |
           zip -r MikuPan_${{ matrix.sys.name }}_nightly.zip MikuPan/*
 
-      - name: Publish nightly release
-        uses: ncipollo/release-action@a2e71bdd4e7dab70ca26a852f29600c98b33153e
+      - name: Upload nightly zip
+        uses: actions/upload-artifact@v4
         with:
-          tag: nightly
-          name: "Nightly Build"
-          body: |
-            Automated nightly build of `${{ inputs.ref || 'main' }}`.
+          name: nightly-${{ matrix.sys.name }}
+          if-no-files-found: error
+          path: build/MikuPan_${{ matrix.sys.name }}_nightly.zip
 
-            Commit: ${{ steps.built.outputs.sha }}
+  publish:
+    needs: [shaders, build]
+    # Publish whatever platforms succeeded (matches the old per-platform behaviour).
+    if: ${{ !cancelled() && needs.build.result != 'skipped' && github.repository == 'Mikompilation/MikuPan' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-            > Pre-release / unstable — built every day at 06:00 UTC.
-          prerelease: true
-          makeLatest: false
-          allowUpdates: true
-          removeArtifacts: false
-          replacesArtifacts: true
-          # Move the rolling `nightly` tag to the commit that was built.
-          commit: ${{ steps.built.outputs.sha }}
-          artifacts: build/MikuPan_${{ matrix.sys.name }}_nightly.zip
+    steps:
+      - name: Download nightly zips
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          merge-multiple: true
+          path: dist
+
+      # GitHub resets an asset's download_count when it is replaced, so before
+      # clobbering we add each old asset's count to a running total stored in a
+      # hidden marker in the release body, and carry it forward every night.
+      - name: Publish nightly release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: nightly
+          SHA: ${{ needs.shaders.outputs.sha }}
+          REF: ${{ inputs.ref || 'main' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.zip)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No nightly zips to publish"
+            exit 1
+          fi
+
+          # Move the rolling tag to the commit that was built (assets are left untouched).
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$SHA" -F force=true >/dev/null
+          else
+            gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
+          fi
+
+          carried='{}'
+          if release=$(gh api "repos/$REPO/releases/tags/$TAG" 2>/dev/null); then
+            exists=true
+            prev=$(jq -r '.body // ""' <<<"$release" \
+              | sed -n 's/.*<!-- nightly-downloads: \(.*\) -->.*/\1/p' | head -n1)
+            if [ -n "$prev" ] && jq -e 'type == "object"' >/dev/null 2>&1 <<<"$prev"; then
+              carried=$prev
+            fi
+            names=$(printf '%s\n' "${files[@]##*/}" | jq -R . | jq -sc .)
+            # Only the assets about to be replaced lose their counts.
+            carried=$(jq -c --argjson names "$names" --argjson c "$carried" '
+              reduce (.assets[] | select(.name as $n | $names | index($n))) as $a
+                ($c; .[$a.name] = ((.[$a.name] // 0) + $a.download_count))' <<<"$release")
+          else
+            exists=false
+          fi
+
+          total=$(jq '[.[]] | add // 0' <<<"$carried")
+          {
+            echo "Automated nightly build of \`$REF\`."
+            echo
+            echo "Commit: $SHA"
+            echo
+            echo "> Pre-release / unstable — built every day at 06:00 UTC."
+            echo
+            echo "**Downloads of previous nightlies:** $total"
+            echo
+            echo "| Asset | Downloads |"
+            echo "| --- | --- |"
+            jq -r 'to_entries[] | "| `\(.key)` | \(.value) |"' <<<"$carried"
+            echo
+            echo "<!-- nightly-downloads: $carried -->"
+          } > notes.md
+
+          if [ "$exists" = true ]; then
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"
+            gh release edit "$TAG" --repo "$REPO" --title "Nightly Build" \
+              --notes-file notes.md --prerelease --latest=false
+          else
+            gh release create "$TAG" "${files[@]}" --repo "$REPO" --verify-tag \
+              --title "Nightly Build" --notes-file notes.md --prerelease --latest=false
+          fi
