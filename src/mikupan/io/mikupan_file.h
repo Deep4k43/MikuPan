@@ -49,6 +49,15 @@ u_int MikuPan_GetDataFileSize(const char *relative_name);
 /// short.
 bool MikuPan_ReadDataFileRange(const char *relative_name, int64_t offset,
                                void *buffer, size_t size);
+/// Opens a file of the configured data folder for repeated range reads
+/// (MikuPan_ReadDataFileRange() reopens the file on every call). Works with
+/// plain paths and Android content URIs. Returns NULL (without prompting
+/// for a data folder) when the file cannot be opened.
+void *MikuPan_OpenDataFile(const char *relative_name);
+/// Reads exactly `size` bytes at `offset`; false on a short read.
+bool MikuPan_ReadOpenDataFile(void *file, int64_t offset, void *buffer,
+                              size_t size);
+void MikuPan_CloseDataFile(void *file);
 u_char MikuPan_OpenFile(const char *filename, void *buffer, int size);
 u_char MikuPan_SaveFile(const char *filename, void *buffer, int size);
 bool MikuPan_ResolveCdPath(const char* path, char* buffer, size_t buffer_size);

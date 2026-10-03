@@ -113,6 +113,9 @@ typedef struct MikuPan_GPUUniformBlock
 
     // x=paper white in output colorspace, y=usable HDR headroom
     float uHdrOutput[4];
+
+    // x=gray the sampled model texel (black & white mode, baked textures)
+    int uFlags3[4];
 } MikuPan_GPUUniformBlock;
 
 /// Create the SDL_GPU device and claim the window. gpu_driver requests an
@@ -273,6 +276,9 @@ void MikuPan_GPUSetMatrix4(const char *name, const float *mat);
 void MikuPan_GPUSetMatrix3(const char *name, const float *mat);
 void MikuPan_GPUSetVec4(const char *name, const float *vec);
 void MikuPan_GPUSetInt(const char *name, int value);
+/// Per-draw flag of the textured mesh shader: gray the sampled texel. Only
+/// marks the fragment uniforms dirty when the value changes.
+void MikuPan_GPUSetBlackWhiteTexel(int enabled);
 void MikuPan_GPUSetFloat(const char *name, float value);
 void MikuPan_GPUSetVec2(const char *name, float x, float y);
 

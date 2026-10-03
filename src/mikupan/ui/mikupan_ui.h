@@ -16,6 +16,9 @@ void MikuPan_RenderUi(void);
 void MikuPan_StartFrameUi(void);
 void MikuPan_DrawUi(void);
 void MikuPan_DrawMissingDataUi(const char *missing_file);
+/// Shown while the model textures are baked on first launch (or when the
+/// bake failed).
+void MikuPan_DrawTextureBakeUi(void);
 void MikuPan_ShutDownUi(void);
 void MikuPan_ProcessEventUi(SDL_Event *event);
 void MikuPan_RequestQuit(void);

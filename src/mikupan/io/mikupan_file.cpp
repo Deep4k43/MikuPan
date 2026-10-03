@@ -977,6 +977,50 @@ bool MikuPan_ReadDataFileRange(const char *relative_name, int64_t offset,
     return !infile.bad() && static_cast<size_t>(infile.gcount()) == size;
 }
 
+void *MikuPan_OpenDataFile(const char *relative_name)
+{
+    const std::string path_string = MikuPan_GetDataPathString(relative_name);
+    return SDL_IOFromFile(path_string.c_str(), "rb");
+}
+
+bool MikuPan_ReadOpenDataFile(void *file, int64_t offset, void *buffer,
+                              size_t size)
+{
+    SDL_IOStream *io = static_cast<SDL_IOStream *>(file);
+
+    if (io == nullptr || buffer == nullptr
+        || SDL_SeekIO(io, offset, SDL_IO_SEEK_SET) < 0)
+    {
+        return false;
+    }
+
+    auto *dst = static_cast<uint8_t *>(buffer);
+    size_t remaining = size;
+
+    while (remaining > 0)
+    {
+        const size_t got = SDL_ReadIO(io, dst, remaining);
+
+        if (got == 0)
+        {
+            return false;
+        }
+
+        dst += got;
+        remaining -= got;
+    }
+
+    return true;
+}
+
+void MikuPan_CloseDataFile(void *file)
+{
+    if (file != nullptr)
+    {
+        SDL_CloseIO(static_cast<SDL_IOStream *>(file));
+    }
+}
+
 void MikuPan_BufferFile(int sector, int size, int64_t address)
 {
     std::string archive_string = MikuPan_GetDataPathString("IMG_BD.BIN");

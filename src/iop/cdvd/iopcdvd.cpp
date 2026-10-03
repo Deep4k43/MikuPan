@@ -10,6 +10,7 @@
 #include "libcdvd.h"
 #include "mikupan/io/mikupan_file_c.h"
 #include "mikupan/mikupan_memory.h"
+#include "mikupan/rendering/mikupan_baked_texture.h"
 #include "memory.h"
 #include "sif.h"
 #include "string.h"
@@ -876,8 +877,13 @@ static int ICdvdTryWholeFileLoad(CDVD_REQ_BUF* req_bufp)
         name = file_name[req_bufp->file_no];
     }
 
-    if (!ICdvdReadWholeNamedFile(name, req_bufp->taddr,
-            (u_int)req_bufp->size_sector)
+    /// Entries the texture bake rewrote are read from the texture pack.
+    if (!MikuPan_BakedTexture_ReadEntry(req_bufp->file_no,
+                                        (u_int)req_bufp->start_sector,
+                                        (u_int)req_bufp->size_sector,
+                                        req_bufp->taddr)
+        && !ICdvdReadWholeNamedFile(name, req_bufp->taddr,
+                                    (u_int)req_bufp->size_sector)
         && !ICdvdReadWholeArchiveFile(req_bufp))
     {
         return 0;
