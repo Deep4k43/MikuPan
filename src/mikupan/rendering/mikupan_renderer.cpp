@@ -8,8 +8,7 @@
 #include "graphics/graph2d/message.h"
 #include "graphics/graph3d/sgsu.h"
 #include "mikupan/gameplay/mikupan_effect_compat.h"
-#include "mikupan/gs/mikupan_gs_c.h"
-#include "mikupan/gs/mikupan_texture_manager_c.h"
+#include "mikupan_texture_slots.h"
 #include "mikupan/io/mikupan_file_c.h"
 #include "mikupan/debug/mikupan_logging_c.h"
 #include "mikupan/mikupan_screenshot.h"
@@ -1732,7 +1731,7 @@ void MikuPan_Clear()
     MikuPan_PerfBeginFrame();
     MikuPan_ShadowDebugBeginFrame();
 
-    MikuPan_GsResetFrameMetrics();
+    MikuPan_TexSlots_ResetFrameStats();
     MikuPan_PerfResetFrame();
 
     MikuPan_ResetShaderCache();

@@ -158,8 +158,8 @@ void MikuPan_DrawTextureBakeUi(void)
 
     if (failed)
     {
-        igTextWrapped("MikuPan could not prepare the model textures from the "
-                      "game data:");
+        igTextWrapped("MikuPan could not prepare the textures from the game "
+                      "data:");
         igSpacing();
         igTextWrapped("%s", MikuPan_BakedTexture_GetError());
         igSpacing();
@@ -171,8 +171,8 @@ void MikuPan_DrawTextureBakeUi(void)
     }
     else
     {
-        igTextWrapped("MikuPan is converting the model textures of the game "
-                      "data. This happens once and takes a few seconds.");
+        igTextWrapped("MikuPan is converting the textures of the game data. "
+                      "This happens once and takes a few seconds.");
         igSpacing();
         igText("%s", strcmp(stage, "verify") == 0 ? "Checking" : "Converting");
         igProgressBar(progress, ImVec2{-1.0f, 0.0f}, NULL);

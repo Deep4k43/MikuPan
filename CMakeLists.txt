@@ -42,7 +42,6 @@ include(implot)
 include(spdlog)
 include(cglm)
 include(ffmpeg)
-include(xxhash)
 include(inipp)
 include(shadercross)
 
@@ -305,11 +304,11 @@ set(MIKUPAN_SOURCES
         src/mikupan/rendering/mikupan_shader.cpp
         src/mikupan/rendering/mikupan_sprite.cpp
         src/mikupan/rendering/mikupan_texture.cpp
-        src/mikupan/gs/mikupan_gs.cpp
+        src/mikupan/rendering/mikupan_texture_slots.cpp
         src/mikupan/gs/mikupan_gs_memory.cpp
-        src/mikupan/gs/mikupan_texture_manager.cpp
         src/mikupan/bake/mikupan_bake.cpp
         src/mikupan/bake/mikupan_bake_data.cpp
+        src/mikupan/bake/mikupan_tim2.cpp
         src/mikupan/rendering/mikupan_baked_texture.cpp
         "src/mikupan/debug/mikupan_logging.cpp"
         src/graphics/graph3d/libsg.cpp
@@ -357,12 +356,12 @@ set(MIKUPAN_NATIVE_CXX_SOURCES
         "src/mikupan/av/mikupan_video_decoder.cpp"
         "src/mikupan/av/mikupan_video_decoder_c.cpp"
         "src/mikupan/gameplay/mikupan_title_scene.cpp"
-        "src/mikupan/gs/mikupan_gs.cpp"
         "src/mikupan/gs/mikupan_gs_memory.cpp"
-        "src/mikupan/gs/mikupan_texture_manager.cpp"
         "src/mikupan/bake/mikupan_bake.cpp"
         "src/mikupan/bake/mikupan_bake_data.cpp"
+        "src/mikupan/bake/mikupan_tim2.cpp"
         "src/mikupan/rendering/mikupan_baked_texture.cpp"
+        "src/mikupan/rendering/mikupan_texture_slots.cpp"
         "src/mikupan/mikupan_audio_bus.cpp"
         "src/mikupan/mikupan_config_ini.cpp"
         "src/mikupan/debug/mikupan_logging.cpp"
@@ -495,7 +494,6 @@ target_link_libraries(MikuPan PRIVATE
         avutil
         swresample
         avformat
-        xxHash::xxhash
         inipp::inipp
 )
 

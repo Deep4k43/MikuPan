@@ -59,11 +59,13 @@ void PrintUsage()
         "      Reports what would change without writing anything.\n"
         "  sgdstitch bake <IMG_HD.BIN> <IMG_BD.BIN> --names <fnameee.h> --out "
         "<dir>\n"
-        "      Decodes every model texture into <dir>/IMG_TEX.BIN, the pack "
-        "the game\n"
-        "      bakes on first launch. --archive also writes "
-        "<dir>/IMG_HD.BIN and\n"
-        "      <dir>/IMG_BD.BIN with the baked entries patched in place.\n"
+        "      Decodes every model texture and 2D picture into "
+        "<dir>/IMG_TEX.BIN,\n"
+        "      the pack the game bakes on first launch. --archive also "
+        "writes\n"
+        "      <dir>/IMG_HD.BIN and <dir>/IMG_BD.BIN with the baked entries "
+        "and\n"
+        "      the 2D stamps patched in place.\n"
         "\n"
         "Options:\n"
         "  --names <fnameee.h>   label archive entries using "
@@ -722,7 +724,13 @@ int RunBake(const Args& a)
                 stats.images, stats.image_bytes / 1e6);
     std::printf("  uncovered texels %zu in %zu textures\n",
                 stats.uncovered_texels, stats.uncovered_textures);
-    std::printf("  verified slots %zu%s\n", stats.verified_slots,
+    std::printf("  2D files %zu: pictures %zu (%zu CLUT-only, %zu stored as "
+                "pixels), derived textures %zu (%.1f MB of pixels)\n",
+                stats.files_2d, stats.pictures_2d, stats.pictures_2d_base,
+                stats.pictures_2d_baked, stats.derived_2d,
+                stats.image_bytes_2d / 1e6);
+    std::printf("  verified slots %zu, 2D textures %zu%s\n",
+                stats.verified_slots, stats.verified_2d,
                 options.verify ? "" : " (verification skipped)");
     std::printf("  pack size %.1f MB\n", stats.pack_size / 1e6);
 
@@ -746,7 +754,7 @@ int RunBake(const Args& a)
     }
 
     std::vector<uint8_t> packed;
-    if (!ReadFile(pack_path, &packed) || packed.size() < 96)
+    if (!ReadFile(pack_path, &packed) || packed.size() < 128)
     {
         std::fprintf(stderr, "cannot read %s\n", pack_path.string().c_str());
         return 1;
@@ -773,6 +781,29 @@ int RunBake(const Args& a)
         const uint32_t sector = sgd::Rd32(&source.hd[i * 8]);
         out_bd.seekp((std::streamoff) (sector * kSectorSize));
         out_bd.write((const char*) &packed[offset], size);
+    }
+
+    /// 2D stamps: 16 bytes inside the picture headers of the 2D files.
+    const uint64_t patches = sgd::Rd32(&packed[0x68])
+                             | ((uint64_t) sgd::Rd32(&packed[0x6C]) << 32);
+    const uint64_t ranges = sgd::Rd32(&packed[0x70])
+                            | ((uint64_t) sgd::Rd32(&packed[0x74]) << 32);
+
+    for (uint32_t i = 0; i < entry_count; i++)
+    {
+        const uint8_t* r = &packed[ranges + (uint64_t) i * 8];
+        const uint32_t first = sgd::Rd32(r);
+        const uint32_t count = sgd::Rd32(r + 4);
+        const uint32_t sector = sgd::Rd32(&source.hd[i * 8]);
+
+        for (uint32_t k = 0; k < count; k++)
+        {
+            const uint8_t* rec =
+                &packed[patches + (uint64_t) (first + k) * 40];
+            out_bd.seekp((std::streamoff) (sector * kSectorSize
+                                           + sgd::Rd32(rec)));
+            out_bd.write((const char*) rec + 24, 16);
+        }
     }
 
     if (!out_bd)

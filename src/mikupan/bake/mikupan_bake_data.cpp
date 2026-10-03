@@ -53,8 +53,9 @@ size_t ImageQwords(const uint8_t* data, size_t li)
     return (size_t)(Rd64(data + li + 80) & 0x7FFF);
 }
 
-/// One TRI2 packet (MikuPan_MirrorTri2PacketToHostGs()): the image, and for
-/// any DPSM other than PSMCT32 the CLUT load image that follows it.
+/// One TRI2 packet, as the game's GS mirror of it used to upload it: the
+/// image, and for any DPSM other than PSMCT32 the CLUT load image that
+/// follows it.
 bool ReadTri2Packet(const uint8_t* data, size_t size, size_t packet,
                     std::vector<Upload>* out, std::string* error)
 {

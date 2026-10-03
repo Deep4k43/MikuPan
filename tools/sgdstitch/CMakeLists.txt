@@ -18,6 +18,7 @@ add_executable(sgdstitch
         src/sgd_verify.cpp
         ${MIKUPAN_SOURCE_DIR}/mikupan/bake/mikupan_bake.cpp
         ${MIKUPAN_SOURCE_DIR}/mikupan/bake/mikupan_bake_data.cpp
+        ${MIKUPAN_SOURCE_DIR}/mikupan/bake/mikupan_tim2.cpp
         ${MIKUPAN_SOURCE_DIR}/mikupan/gs/mikupan_gs_memory.cpp
 )
 

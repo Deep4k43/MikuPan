@@ -13,8 +13,6 @@
 #include "graphics/graph3d/libsg.h"
 #include "graphics/graph3d/sglib.h"
 #include "graphics/graph3d/sgsu.h"
-#include "mikupan/gs/mikupan_gs_c.h"
-#include "mikupan/gs/mikupan_texture_manager_c.h"
 #include "mikupan/gameplay/mikupan_graph3d_compat.h"
 #include "mikupan/debug/mikupan_logging_c.h"
 #include "mikupan/mikupan_types.h"
@@ -288,8 +286,6 @@ void LoadTRI2Files(u_int *prim)
     {
         tri2size = *(u_short *)(prim + 3);
 
-        MikuPan_MirrorTri2PacketToHostGs(prim);
-
         AppendDmaTag((int64_t)prim, tri2size + 1);
 
         prim = (u_int *)((int64_t)prim + 0x10 + (u_int)tri2size * 0x10);
@@ -368,7 +364,6 @@ void RebuildTRI2Files(u_int *prim)
         SGDTRI2FILEHEADER * tri2 = (SGDTRI2FILEHEADER *) prim;
 
         info_log("Packet TRi2 archive request buffer %x %d", (int)tri2->gsli.bitbltbuf.DBP, (int) tri2->gsli.bitbltbuf.DPSM);
-        MikuPan_MirrorTri2PacketToHostGs(prim);
 
         while (((uint64_t)search_addr - (uint64_t)(prim)) / 16 < tri2size - 8)
         {
@@ -573,13 +568,7 @@ void LoadTextureAnimation(u_int *prim)
         return;
     }
 
-    for (i = 0; i < tnum+1; i++)
-    {
-        MikuPan_MirrorTri2PacketToHostGs(prim);
-        tri2size = *(u_short *)&prim[3];
-        prim = (u_int *)((int64_t)&prim[4] + tri2size * 16);
-    }
-
+    /// Unbaked frames: the texture pack is required, nothing shows them.
     return;
 
     tri2size = *(u_short *)&prim[3];

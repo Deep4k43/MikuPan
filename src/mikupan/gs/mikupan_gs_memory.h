@@ -6,10 +6,11 @@
 #include <vector>
 
 /// Dependency-free emulation of the PS2 GS local memory: the swizzled VRAM
-/// layout, image uploads and the texture decode MikuPan performs for a TEX0.
-/// The game (mikupan_gs.cpp) and the offline texture baker both compile this
-/// unit, so a baked texture is byte-identical to what the game would decode
-/// from VRAM. Keep it free of SDL, logging and game headers.
+/// layout, image uploads and the texture decode MikuPan performed for a TEX0
+/// before its textures were baked. Only the texture baker uses it now (in
+/// the game for the first-launch bake, and in tools/sgdstitch): the bake
+/// decodes model textures with it and checks every baked texture against
+/// it. Keep it free of SDL, logging and game headers.
 
 enum PixelStorageFormat
 {
@@ -164,7 +165,7 @@ class GSHelper
     GSHelper();
     ~GSHelper() = default;
 
-    /// Stores an image transfer the way MikuPan_GsUpload() does: PSMZ32 as
+    /// Stores an image transfer the way the game's GS uploads did: PSMZ32 as
     /// PSMCT32, every 16-bit format as PSMCT16, PSMT8 and PSMT4. Returns false
     /// (and writes nothing) for any other DPSM.
     bool Upload(int dpsm, int dbp, int dbw, int dsax, int dsay, int rrw,
@@ -192,7 +193,7 @@ class GSHelper
                             int csa, int alpha_reg) const;
 
     /// Decodes the texture `tex0` names into `outbuf` (width * height RGBA8
-    /// pixels, rows top-down) exactly as MikuPan_GsDownloadTexture() does:
+    /// pixels, rows top-down) exactly as the game's texture binding did:
     /// de-swizzle, CLUT lookup (16x16 PSMCT32 CLUT with the CSM1 index
     /// shuffle for PSMT8, 8x2 entries at CSA for PSMT4), then
     /// ConvertImageAlpha(). Returns false when !IsDecodableTexture(tex0).

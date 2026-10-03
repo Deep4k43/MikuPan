@@ -123,7 +123,7 @@ size_t MeshTextureSlot(const uint8_t* data, const Unit& mesh,
 
 /// --- GS uploads ---------------------------------------------------------------
 
-/// One GS image transfer, as MikuPan_GsUpload() stores it.
+/// One GS image transfer, as GS::GSHelper::Upload() stores it.
 struct Upload
 {
     int dpsm = 0;
@@ -140,8 +140,8 @@ struct Upload
 /// Bytes GS::GSHelper::Upload() reads for `u`, 0 for a DPSM it ignores.
 size_t UploadBytes(const Upload& u);
 
-/// Uploads of a TRI2 (10) or mono CLUT (13) unit, in order
-/// (LoadTRI2Files() + MikuPan_MirrorTri2PacketToHostGs()).
+/// Uploads of a TRI2 (10) or mono CLUT (13) unit, in the order
+/// LoadTRI2Files() sends its packets.
 bool ParseTri2Unit(const uint8_t* data, size_t size, const Unit& unit,
                    std::vector<Upload>* out, std::string* error);
 

@@ -2,6 +2,7 @@
 
 #include "mikupan_bake_data.h"
 #include "mikupan_bake_format.h"
+#include "mikupan_tim2.h"
 #include "mikupan/gs/mikupan_gs_memory.h"
 
 #include <algorithm>
@@ -121,6 +122,70 @@ constexpr int kPlayerModelCount =
     (int)(sizeof(kPlayerModels) / sizeof(kPlayerModels[0]));
 
 // ---------------------------------------------------------------------------
+// 2D textures the game draws by a TEX0 that is no picture's own: sprite
+// table entries (src/data*/) whose texels and CLUT lie inside the images of
+// one 2D file. They are baked in every file that writes all of what the
+// used rectangles read. The values are the same in the NTSC-U and PAL
+// tables.
+
+struct DerivedRect
+{
+    int u;
+    int v;
+    int w;
+    int h;
+};
+
+struct DerivedTexture
+{
+    const char* label;
+    uint64_t tex0;
+    int rect_count;
+    DerivedRect rects[10];
+};
+
+const DerivedTexture kDerivedTextures[] = {
+    /// mesbox[]: inside two images of the effect pack (eff001.pk2).
+    {"message box",
+     0x2006e6059940b6ceULL,
+     8,
+     {{1, 1, 30, 14},
+      {33, 1, 30, 14},
+      {1, 17, 30, 14},
+      {33, 17, 30, 14},
+      {1, 33, 30, 14},
+      {33, 33, 30, 14},
+      {1, 49, 30, 14},
+      {33, 49, 30, 14}}},
+    /// btntex[]: an effect pack image drawn with a CLUT that lies inside
+    /// another of its images.
+    {"button icons",
+     0x2006e4059940b5c0ULL,
+     4,
+     {{0, 0, 24, 24}, {26, 0, 24, 24}, {0, 26, 24, 24}, {26, 26, 24, 24}}},
+    /// number_tex[1]: digits inside the 512x512 images at block 0x1A40
+    /// (camera HUD, mode select, logo).
+    {"number font 1",
+     0x2003b8a621311cc5ULL,
+     10,
+     {{0, 0, 24, 40},
+      {24, 0, 24, 40},
+      {48, 0, 24, 40},
+      {72, 0, 24, 40},
+      {96, 0, 24, 40},
+      {0, 40, 24, 40},
+      {24, 40, 24, 40},
+      {48, 40, 24, 40},
+      {72, 40, 24, 40},
+      {96, 40, 24, 40}}},
+    /// font_sprt[] of the PAL title screen.
+    {"title letters",
+     0x200519a5dd30a88dULL,
+     2,
+     {{1, 1, 126, 48}, {1, 51, 10, 48}}},
+};
+
+// ---------------------------------------------------------------------------
 // GS VRAM that also records which nibbles an upload wrote, so a decode can
 // tell whether every texel and CLUT entry it read came from the replayed
 // uploads (and not from whatever the game had in VRAM before).
@@ -132,13 +197,25 @@ class Vram
     {
     }
 
+    /// Clears what uploads wrote since the last reset: a 2D file touches a
+    /// few hundred KB of the 8 MB, a model a few MB.
     void Reset()
     {
-        gs_.Clear();
-        std::fill(written_.begin(), written_.end(), 0);
+        if (dirty_begin_ < dirty_end_)
+        {
+            const size_t first_byte = (size_t)(dirty_begin_ / 2);
+            const size_t end_byte = (size_t)((dirty_end_ + 1) / 2);
+            std::memset(gs_.mem_.data() + first_byte, 0, end_byte - first_byte);
+            std::fill(written_.begin() + (ptrdiff_t)(dirty_begin_ / 64),
+                      written_.begin() + (ptrdiff_t)((dirty_end_ + 63) / 64),
+                      0);
+        }
+
+        dirty_begin_ = ~(uint64_t)0;
+        dirty_end_ = 0;
     }
 
-    /// MikuPan_GsUpload(): `ignored` counts transfers with a DPSM the game
+    /// GS::GSHelper::Upload(): `ignored` counts transfers with a DPSM it
     /// does not store.
     bool Apply(const Upload& u, size_t* ignored, std::string* error)
     {
@@ -196,21 +273,36 @@ class Vram
     }
 
     /// GS::GSHelper::DecodeTexture() into `out`; `uncovered` counts texels
-    /// whose index/colour or CLUT entry no replayed upload wrote.
-    bool Decode(const GS::Tex0& t, uint8_t* out, size_t* uncovered) const
+    /// of the top-left `region_w` x `region_h` whose index/colour or CLUT
+    /// entry no replayed upload wrote.
+    bool Decode(const GS::Tex0& t, uint8_t* out, size_t* uncovered,
+                int region_w = 1 << 30, int region_h = 1 << 30) const
     {
         if (!gs_.DecodeTexture(t, out))
         {
             return false;
         }
 
-        const int w = 1 << t.tw;
-        const int h = 1 << t.th;
+        *uncovered = Uncovered(t, 0, 0, std::min(1 << t.tw, region_w),
+                               std::min(1 << t.th, region_h));
+        return true;
+    }
+
+    /// GS::GSHelper::DecodeTexture() into `out`, without the coverage count.
+    bool Decode(const GS::Tex0& t, uint8_t* out) const
+    {
+        return gs_.DecodeTexture(t, out);
+    }
+
+    /// Texels of the rectangle whose index/colour or CLUT entry no replayed
+    /// upload wrote.
+    size_t Uncovered(const GS::Tex0& t, int x0, int y0, int w, int h) const
+    {
         size_t missing = 0;
 
-        for (int y = 0; y < h; ++y)
+        for (int y = y0; y < y0 + h; ++y)
         {
-            for (int x = 0; x < w; ++x)
+            for (int x = x0; x < x0 + w; ++x)
             {
                 bool ok = true;
 
@@ -272,8 +364,7 @@ class Vram
             }
         }
 
-        *uncovered = missing;
-        return true;
+        return missing;
     }
 
   private:
@@ -284,6 +375,8 @@ class Vram
     void Mark(uint64_t nibble, int count)
     {
         written_[nibble >> 6] |= ((1ULL << count) - 1) << (nibble & 63);
+        dirty_begin_ = std::min(dirty_begin_, nibble);
+        dirty_end_ = std::max(dirty_end_, nibble + (uint64_t)count);
     }
 
     bool Written(uint64_t nibble, int count) const
@@ -294,6 +387,9 @@ class Vram
 
     GS::GSHelper gs_;
     std::vector<uint64_t> written_;
+    /// Nibbles uploads wrote since the last Reset().
+    uint64_t dirty_begin_ = ~(uint64_t)0;
+    uint64_t dirty_end_ = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -375,6 +471,8 @@ struct DecodedContext
 
 // ---------------------------------------------------------------------------
 
+struct File2D;
+
 class Baker
 {
   public:
@@ -425,8 +523,17 @@ class Baker
     bool WriteEntry(size_t fid, const std::vector<uint8_t>& data,
                     std::string* error);
 
+    bool Bake2D(std::string* error);
+    bool Bake2DFile(size_t fid, const std::vector<uint8_t>& data,
+                    const std::vector<size_t>& headers, std::string* error);
+    bool BakeDerived(const std::string& name, const File2D& f,
+                     const std::vector<uint32_t>& ids, std::string* error);
+    bool StorePixels(const std::vector<uint8_t>& rgba, uint64_t* offset,
+                     std::string* error);
+
     bool Verify(std::string* error);
     bool VerifyFile(size_t fid, std::string* error);
+    bool Verify2DFile(size_t fid, std::string* error);
     bool WritePack(std::string* error);
 
     const Source& source_;
@@ -447,6 +554,14 @@ class Baker
     /// for the costume .pk2 lists.
     std::vector<std::pair<uint32_t, uint32_t>> player_slots_[2];
     bool player_baked_[2] = {false, false};
+
+    /// 2D textures, the derived textures each 2D id's upload completes,
+    /// and the stamps per archive entry.
+    std::vector<Tex2DEntry> tex2d_;
+    std::vector<std::vector<Tex2DDerived>> derived_;
+    std::vector<PatchRecord> patches_;
+    std::map<std::pair<uint32_t, uint32_t>, PatchRange> patch_ranges_;
+    std::vector<size_t> files_2d_;
 
     Vram vram_;
 };
@@ -1609,6 +1724,445 @@ bool Baker::WriteEntry(size_t fid, const std::vector<uint8_t>& data,
     return true;
 }
 
+// --- 2D textures ----------------------------------------------------------------
+
+/// One 2D file: its pictures and the uploads SetSprFile() makes for them.
+struct File2D
+{
+    std::vector<size_t> headers;
+    std::vector<Tim2Picture> pictures;
+    std::vector<Upload> uploads;
+    std::vector<size_t> upload_picture;///< per upload
+    /// The last upload that starts at a block: picture and whether it is
+    /// the picture's CLUT.
+    std::map<int, std::pair<size_t, bool>> starts;
+};
+
+/// Reads the pictures and lists their uploads in MakeTim2ClutDirect3()
+/// order at offset 0: per picture its image at TBP0 (MakeTim2Direct3(),
+/// skipped without image data), then its CLUT at CBP (MakeClutDirect3()).
+/// False if a picture's data runs past the file.
+bool ReadFile2D(const std::vector<uint8_t>& data,
+                const std::vector<size_t>& headers, File2D* f)
+{
+    const uint8_t* end = data.data() + data.size();
+
+    f->headers = headers;
+    f->pictures.assign(headers.size(), {});
+
+    for (size_t i = 0; i < headers.size(); i++)
+    {
+        Tim2Picture& p = f->pictures[i];
+
+        if (!ReadTim2Picture(data.data() + headers[i],
+                             data.size() - headers[i], &p))
+        {
+            return false;
+        }
+
+        const Tim2Tex0 t = SplitTex0(p.tex0);
+
+        if (p.image_size != 0)
+        {
+            Upload u;
+            u.dpsm = t.psm;
+            u.dbp = t.tbp0;
+            u.dbw = t.tbw;
+            u.rrw = p.width & 0xFFF;
+            u.rrh = p.height & 0xFFF;
+            u.data = p.image;
+            u.available = (size_t)(end - p.image);
+            f->uploads.push_back(u);
+            f->upload_picture.push_back(i);
+            f->starts[u.dbp] = {i, false};
+        }
+
+        if (p.clut_size != 0)
+        {
+            Upload u;
+            u.dpsm = PSMCT32;
+            u.dbp = t.cbp;
+            u.dbw = 1;
+            u.rrw = p.clut_colors == 16 ? 8 : 16;
+            u.rrh = p.clut_colors == 16 ? 2 : p.clut_colors / 16;
+            u.data = p.clut;
+            u.available = (size_t)(end - p.clut);
+            f->uploads.push_back(u);
+            f->upload_picture.push_back(i);
+            f->starts[u.dbp] = {i, true};
+        }
+    }
+
+    for (const Upload& u : f->uploads)
+    {
+        if (UploadBytes(u) > u.available)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/// MikuPan_SetTexture() binds a texture for this TEX0 (else nothing).
+bool Drawable(uint64_t tex0)
+{
+    const GS::Tex0 t = GS::DecodeTex0(tex0);
+    int addr;
+    int size;
+    return GS::GetRawTextureRegion(t, &addr, &size) && GS::IsDecodableTexture(t);
+}
+
+/// Clears the texels of a w x h RGBA8 image outside its top-left
+/// keep_w x keep_h.
+void ZeroOutside(std::vector<uint8_t>* rgba, int w, int h, int keep_w,
+                 int keep_h)
+{
+    for (int y = 0; y < h; y++)
+    {
+        const int from = y < keep_h ? std::min(std::max(keep_w, 0), w) : 0;
+        std::fill(rgba->begin() + ((ptrdiff_t)y * w + from) * 4,
+                  rgba->begin() + ((ptrdiff_t)y + 1) * w * 4, 0);
+    }
+}
+
+/// True if two (1 << TW)-wide RGBA8 images agree inside the rectangles.
+bool SameInRects(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b,
+                 const GS::Tex0& t, const DerivedTexture& d)
+{
+    if (a.size() != b.size())
+    {
+        return false;
+    }
+
+    const int w = 1 << t.tw;
+
+    for (int r = 0; r < d.rect_count; r++)
+    {
+        const DerivedRect& rc = d.rects[r];
+
+        for (int y = rc.v; y < rc.v + rc.h; y++)
+        {
+            const size_t at = ((size_t)y * w + rc.u) * 4;
+
+            if (std::memcmp(&a[at], &b[at], (size_t)rc.w * 4) != 0)
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+/// The id a stamp names for the picture whose upload starts at `block`.
+uint32_t OwnerAt(const File2D& f, const std::vector<uint32_t>& ids, int block)
+{
+    const auto it = f.starts.find(block);
+    return it == f.starts.end() ? kNoOwner : ids[it->second.first];
+}
+
+bool Baker::StorePixels(const std::vector<uint8_t>& rgba, uint64_t* offset,
+                        std::string* error)
+{
+    *offset = Align16(pos_);
+
+    if (!sink_->write(*offset, rgba.data(), rgba.size()))
+    {
+        *error = "cannot write the pack";
+        return false;
+    }
+
+    pos_ = *offset + rgba.size();
+    stats_->image_bytes_2d += rgba.size();
+    return true;
+}
+
+/// Every 2D file: a TIM2 file or a pk2 of TIM2 files outside bin/3ddata/.
+bool Baker::Bake2D(std::string* error)
+{
+    const size_t count = entries_.size();
+    std::set<std::pair<uint32_t, uint32_t>> seen;
+    std::vector<uint8_t> data;
+    std::vector<size_t> headers;
+
+    for (size_t fid = 0; fid < count; fid++)
+    {
+        Progress("bake 2D", fid, count);
+
+        if (Cancelled(error))
+        {
+            return false;
+        }
+
+        if (entries_[fid].second == 0
+            || source_.names[fid].rfind(k3dPrefix, 0) == 0
+            || !seen.insert(entries_[fid]).second)
+        {
+            continue;
+        }
+
+        if (!ReadEntry(fid, &data, error))
+        {
+            return false;
+        }
+
+        if (FindTim2Pictures(data.data(), data.size(), &headers)
+            && !Bake2DFile(fid, data, headers, error))
+        {
+            return false;
+        }
+    }
+
+    Progress("bake 2D", count, count);
+    return true;
+}
+
+/// Gives each picture of a 2D file an id and works out what its TEX0 shows
+/// once the whole file is uploaded: its own image and CLUT, the image of
+/// the picture before it at the same TBP0 with its own CLUT (CLUT-only
+/// pictures: the colour / monochrome pairs), both decoded by the game from
+/// the pictures in memory, or else the GS image stored as pixels.
+bool Baker::Bake2DFile(size_t fid, const std::vector<uint8_t>& data,
+                       const std::vector<size_t>& headers, std::string* error)
+{
+    const std::string& name = source_.names[fid];
+    File2D f;
+
+    if (!ReadFile2D(data, headers, &f))
+    {
+        Log(name + ": a picture runs past the file; the game decodes it "
+                   "unbaked");
+        return true;
+    }
+
+    size_t ignored = 0;
+    vram_.Reset();
+
+    for (const Upload& u : f.uploads)
+    {
+        if (!vram_.Apply(u, &ignored, error))
+        {
+            *error = name + ": " + *error;
+            return false;
+        }
+    }
+
+    const size_t n = f.pictures.size();
+    std::vector<uint32_t> ids(n, kNoTexture);
+    uint32_t next = (uint32_t)tex2d_.size();
+
+    for (size_t i = 0; i < n; i++)
+    {
+        /// The game decides with Tex0Drawable() alone.
+        if (Drawable(f.pictures[i].tex0) != Tex0Drawable(f.pictures[i].tex0))
+        {
+            *error = name + ": Tex0Drawable() disagrees with the GS for TEX0 "
+                     + Hex(f.pictures[i].tex0);
+            return false;
+        }
+
+        if (Drawable(f.pictures[i].tex0))
+        {
+            ids[i] = next++;
+        }
+    }
+
+    tex2d_.resize(next);
+    derived_.resize(next);
+
+    std::vector<uint8_t> gs;
+    std::vector<uint8_t> linear;
+    PatchRange range;
+    range.first = (uint32_t)patches_.size();
+    range.count = (uint32_t)n;
+
+    for (size_t i = 0; i < n; i++)
+    {
+        const Tim2Picture& p = f.pictures[i];
+        uint32_t owner = kNoOwner;
+        int32_t base = 0;
+
+        if (ids[i] != kNoTexture)
+        {
+            const GS::Tex0 t = GS::DecodeTex0(p.tex0);
+            const int tw = 1 << t.tw;
+            const int th = 1 << t.th;
+
+            gs.assign((size_t)tw * th * 4, 0);
+            vram_.Decode(t, gs.data());
+            ZeroOutside(&gs, tw, th, p.width, p.height);
+
+            Tex2DEntry& e = tex2d_[ids[i]];
+            e = Tex2DEntry{};
+            e.tex0 = p.tex0;
+            e.width = (uint16_t)tw;
+            e.height = (uint16_t)th;
+
+            bool from_memory = false;
+            const auto at = f.starts.find(t.tbp0);
+
+            if (at != f.starts.end())
+            {
+                const size_t o = at->second.first;
+                owner = ids[o];
+                linear.resize(gs.size());
+
+                if (!at->second.second
+                    && DecodeTim2Texture(f.pictures[o], p, p.tex0,
+                                         linear.data())
+                    && linear == gs)
+                {
+                    from_memory = true;
+                    base = (int32_t)((int64_t)headers[o] - (int64_t)headers[i]);
+                }
+            }
+
+            if (from_memory)
+            {
+                stats_->pictures_2d_base += base != 0;
+            }
+            else
+            {
+                const size_t uncovered = vram_.Uncovered(
+                    t, 0, 0, std::min(tw, p.width), std::min(th, p.height));
+
+                if (!StorePixels(gs, &e.offset, error))
+                {
+                    return false;
+                }
+
+                stats_->pictures_2d_baked++;
+                Log(name + ": picture " + std::to_string(i) + " (TEX0 "
+                    + Hex(p.tex0) + ") shows more than one picture; stored "
+                    "as pixels"
+                    + (uncovered != 0
+                           ? ", " + std::to_string(uncovered)
+                                 + " texels written by no upload of the file"
+                           : ""));
+            }
+
+            stats_->pictures_2d++;
+        }
+
+        PatchRecord r{};
+        r.offset = (uint32_t)(headers[i] + kTim2StampOffset);
+        std::memcpy(r.before, &data[r.offset], sizeof(r.before));
+        Wr32(r.after, ids[i]);
+        Wr32(r.after + 4, owner);
+        Wr32(r.after + 8, kTim2StampMarker);
+        Wr32(r.after + 12, (uint32_t)base);
+        patches_.push_back(r);
+    }
+
+    if (!BakeDerived(name, f, ids, error))
+    {
+        return false;
+    }
+
+    patch_ranges_[entries_[fid]] = range;
+    files_2d_.push_back(fid);
+    stats_->files_2d++;
+    return true;
+}
+
+/// The derived textures (kDerivedTextures) this file holds: every texel and
+/// CLUT entry the used rectangles read is written by the file and no
+/// picture of it draws by that TEX0. The texture is attached to the
+/// picture whose upload last changes it. Expects vram_ to hold the whole
+/// file, and leaves it so.
+bool Baker::BakeDerived(const std::string& name, const File2D& f,
+                        const std::vector<uint32_t>& ids, std::string* error)
+{
+    for (const DerivedTexture& d : kDerivedTextures)
+    {
+        const GS::Tex0 t = GS::DecodeTex0(d.tex0);
+        bool covered = Drawable(d.tex0);
+
+        for (int r = 0; covered && r < d.rect_count; r++)
+        {
+            const DerivedRect& rc = d.rects[r];
+            covered = vram_.Uncovered(t, rc.u, rc.v, rc.w, rc.h) == 0;
+        }
+
+        for (const Tim2Picture& p : f.pictures)
+        {
+            covered = covered && p.tex0 != d.tex0;
+        }
+
+        if (!covered)
+        {
+            continue;
+        }
+
+        std::vector<uint8_t> full((size_t)4 << (t.tw + t.th));
+        vram_.Decode(t, full.data());
+
+        /// Replay the file picture by picture: the last picture whose
+        /// uploads change the rectangles completes the texture.
+        std::vector<uint8_t> previous;
+        std::vector<uint8_t> current(full.size());
+        size_t completing = 0;
+        size_t ignored = 0;
+        size_t k = 0;
+        vram_.Reset();
+
+        for (size_t i = 0; i < f.pictures.size(); i++)
+        {
+            for (; k < f.uploads.size() && f.upload_picture[k] == i; k++)
+            {
+                if (!vram_.Apply(f.uploads[k], &ignored, error))
+                {
+                    *error = name + ": " + *error;
+                    return false;
+                }
+            }
+
+            vram_.Decode(t, current.data());
+
+            if (!SameInRects(current, previous, t, d))
+            {
+                completing = i;
+                previous = current;
+            }
+        }
+
+        if (ids[completing] == kNoTexture)
+        {
+            Log(name + ": " + d.label + " is completed by a picture the "
+                "game cannot draw; skipped");
+            continue;
+        }
+
+        const Tim2Tex0 ct = SplitTex0(f.pictures[completing].tex0);
+        Tex2DDerived rec{};
+        rec.tex0 = d.tex0;
+        rec.check_block = (uint32_t)(f.pictures[completing].image_size != 0
+                                         ? ct.tbp0
+                                         : ct.cbp);
+        rec.check_owner = OwnerAt(f, ids, (int)rec.check_block);
+        rec.id = (uint32_t)tex2d_.size();
+
+        Tex2DEntry e{};
+        e.tex0 = d.tex0;
+        e.width = (uint16_t)(1 << t.tw);
+        e.height = (uint16_t)(1 << t.th);
+
+        if (!StorePixels(full, &e.offset, error))
+        {
+            return false;
+        }
+
+        tex2d_.push_back(e);
+        derived_.emplace_back();
+        derived_[ids[completing]].push_back(rec);
+        stats_->derived_2d++;
+        Log(name + ": " + d.label + " (TEX0 " + Hex(d.tex0) + ") baked");
+    }
+
+    return true;
+}
+
 // --- Verification -------------------------------------------------------------
 
 bool Baker::VerifyFile(size_t fid, std::string* error)
@@ -1863,11 +2417,171 @@ bool Baker::VerifyFile(size_t fid, std::string* error)
     return true;
 }
 
+/// Loads a 2D file the way the game does (the entry with its stamps
+/// applied) and checks every picture and derived texture: what the game
+/// shows from the stamp - decoded from the pictures, or the stored pixels -
+/// against a fresh decode of the whole file uploaded to GS memory, and the
+/// owners the game compares at draw time.
+bool Baker::Verify2DFile(size_t fid, std::string* error)
+{
+    const std::string& name = source_.names[fid];
+    const PatchRange& range = patch_ranges_.at(entries_[fid]);
+    std::vector<uint8_t> data;
+
+    if (!ReadEntry(fid, &data, error))
+    {
+        return false;
+    }
+
+    for (uint32_t k = 0; k < range.count; k++)
+    {
+        const PatchRecord& r = patches_[range.first + k];
+
+        if (r.offset + sizeof(r.after) > data.size()
+            || std::memcmp(&data[r.offset], r.before, sizeof(r.before)) != 0)
+        {
+            *error = name + ": a stamp does not fit its picture";
+            return false;
+        }
+
+        std::memcpy(&data[r.offset], r.after, sizeof(r.after));
+    }
+
+    std::vector<size_t> headers;
+    File2D f;
+
+    if (!FindTim2Pictures(data.data(), data.size(), &headers)
+        || headers.size() != range.count || !ReadFile2D(data, headers, &f))
+    {
+        *error = name + ": the stamped file does not read back";
+        return false;
+    }
+
+    const size_t n = headers.size();
+    std::vector<uint32_t> ids(n);
+    size_t ignored = 0;
+    vram_.Reset();
+
+    for (const Upload& u : f.uploads)
+    {
+        if (!vram_.Apply(u, &ignored, error))
+        {
+            *error = name + ": " + *error;
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < n; i++)
+    {
+        ids[i] = Rd32(&data[headers[i] + kTim2StampOffset]);
+    }
+
+    std::vector<uint8_t> gs;
+    std::vector<uint8_t> shown;
+
+    for (size_t i = 0; i < n; i++)
+    {
+        const Tim2Picture& p = f.pictures[i];
+        const uint8_t* stamp = &data[headers[i] + kTim2StampOffset];
+        const uint32_t owner = Rd32(stamp + 4);
+        const int32_t base = (int32_t)Rd32(stamp + 12);
+        const std::string where = name + ": picture " + std::to_string(i);
+
+        if (Rd32(stamp + 8) != kTim2StampMarker
+            || (ids[i] == kNoTexture) != !Drawable(p.tex0)
+            || (ids[i] != kNoTexture && ids[i] >= tex2d_.size()))
+        {
+            *error = where + ": bad stamp";
+            return false;
+        }
+
+        if (ids[i] == kNoTexture)
+        {
+            continue;
+        }
+
+        const GS::Tex0 t = GS::DecodeTex0(p.tex0);
+        const Tex2DEntry& e = tex2d_[ids[i]];
+
+        if (e.width != (1 << t.tw) || e.height != (1 << t.th)
+            || e.tex0 != p.tex0)
+        {
+            *error = where + ": bad texture entry";
+            return false;
+        }
+
+        gs.assign((size_t)e.width * e.height * 4, 0);
+        vram_.Decode(t, gs.data());
+        ZeroOutside(&gs, e.width, e.height, p.width, p.height);
+        shown.assign(gs.size(), 0);
+
+        if (e.offset == 0)
+        {
+            const auto source = std::find(headers.begin(), headers.end(),
+                                          (size_t)((int64_t)headers[i] + base));
+
+            if (source == headers.end()
+                || !DecodeTim2Texture(f.pictures[source - headers.begin()], p,
+                                      p.tex0, shown.data()))
+            {
+                *error = where + ": its texture does not decode";
+                return false;
+            }
+        }
+        else if (!sink_->read(e.offset, shown.data(), shown.size()))
+        {
+            *error = "cannot read back the pack";
+            return false;
+        }
+
+        if (shown != gs)
+        {
+            *error = where + " (TEX0 " + Hex(p.tex0) + ") shows other pixels "
+                     "than the GS";
+            return false;
+        }
+
+        if (owner != OwnerAt(f, ids, t.tbp0))
+        {
+            *error = where + ": bad owner";
+            return false;
+        }
+
+        for (const Tex2DDerived& rec : derived_[ids[i]])
+        {
+            const GS::Tex0 dt = GS::DecodeTex0(rec.tex0);
+            const Tex2DEntry& de = tex2d_[rec.id];
+
+            gs.assign((size_t)de.width * de.height * 4, 0);
+            shown.assign(gs.size(), 0);
+            vram_.Decode(dt, gs.data());
+
+            if (de.offset == 0
+                || !sink_->read(de.offset, shown.data(), shown.size())
+                || shown != gs
+                || rec.check_owner != OwnerAt(f, ids, (int)rec.check_block))
+            {
+                *error = where + ": derived texture " + Hex(rec.tex0)
+                         + " does not match";
+                return false;
+            }
+
+            stats_->verified_2d++;
+        }
+
+        stats_->verified_2d++;
+    }
+
+    return true;
+}
+
 bool Baker::Verify(std::string* error)
 {
+    const size_t total = rewritten_.size() + files_2d_.size();
+
     for (size_t i = 0; i < rewritten_.size(); i++)
     {
-        Progress("verify", i, rewritten_.size());
+        Progress("verify", i, total);
 
         if (Cancelled(error) || !VerifyFile(rewritten_[i], error))
         {
@@ -1875,7 +2589,17 @@ bool Baker::Verify(std::string* error)
         }
     }
 
-    Progress("verify", rewritten_.size(), rewritten_.size());
+    for (size_t i = 0; i < files_2d_.size(); i++)
+    {
+        Progress("verify", rewritten_.size() + i, total);
+
+        if (Cancelled(error) || !Verify2DFile(files_2d_[i], error))
+        {
+            return false;
+        }
+    }
+
+    Progress("verify", total, total);
     return true;
 }
 
@@ -1951,7 +2675,83 @@ bool Baker::WritePack(std::string* error)
         return false;
     }
 
-    const uint64_t hd_offset = Align16(probes + buf.size());
+    /// 2D textures: the derived textures of each picture follow one another.
+    const uint64_t tex2d_directory = Align16(probes + buf.size());
+    std::vector<Tex2DDerived> derived;
+    buf.assign(tex2d_.size() * sizeof(Tex2DEntry), 0);
+    for (size_t i = 0; i < tex2d_.size(); i++)
+    {
+        uint8_t* p = &buf[i * sizeof(Tex2DEntry)];
+        Wr64(p, tex2d_[i].offset);
+        Wr64(p + 8, tex2d_[i].tex0);
+        Wr16(p + 16, tex2d_[i].width);
+        Wr16(p + 18, tex2d_[i].height);
+        Wr32(p + 20, (uint32_t)derived.size());
+        Wr32(p + 24, (uint32_t)derived_[i].size());
+        derived.insert(derived.end(), derived_[i].begin(), derived_[i].end());
+    }
+
+    if (!buf.empty() && !sink_->write(tex2d_directory, buf.data(), buf.size()))
+    {
+        *error = "cannot write the pack";
+        return false;
+    }
+
+    const uint64_t derived_offset = Align16(tex2d_directory + buf.size());
+    buf.assign(derived.size() * sizeof(Tex2DDerived), 0);
+    for (size_t i = 0; i < derived.size(); i++)
+    {
+        uint8_t* p = &buf[i * sizeof(Tex2DDerived)];
+        Wr64(p, derived[i].tex0);
+        Wr32(p + 8, derived[i].id);
+        Wr32(p + 12, derived[i].check_block);
+        Wr32(p + 16, derived[i].check_owner);
+    }
+
+    if (!buf.empty() && !sink_->write(derived_offset, buf.data(), buf.size()))
+    {
+        *error = "cannot write the pack";
+        return false;
+    }
+
+    const uint64_t patch_offset = Align16(derived_offset + buf.size());
+    buf.assign(patches_.size() * sizeof(PatchRecord), 0);
+    for (size_t i = 0; i < patches_.size(); i++)
+    {
+        uint8_t* p = &buf[i * sizeof(PatchRecord)];
+        Wr32(p, patches_[i].offset);
+        std::memcpy(p + 8, patches_[i].before, sizeof(patches_[i].before));
+        std::memcpy(p + 24, patches_[i].after, sizeof(patches_[i].after));
+    }
+
+    if (!buf.empty() && !sink_->write(patch_offset, buf.data(), buf.size()))
+    {
+        *error = "cannot write the pack";
+        return false;
+    }
+
+    /// Entries that share data share their stamps.
+    const uint64_t patch_ranges = Align16(patch_offset + buf.size());
+    buf.assign(entries_.size() * sizeof(PatchRange), 0);
+    for (size_t i = 0; i < entries_.size(); i++)
+    {
+        auto it = patch_ranges_.find(entries_[i]);
+
+        if (entries_[i].second != 0 && it != patch_ranges_.end())
+        {
+            uint8_t* p = &buf[i * sizeof(PatchRange)];
+            Wr32(p, it->second.first);
+            Wr32(p + 4, it->second.count);
+        }
+    }
+
+    if (!buf.empty() && !sink_->write(patch_ranges, buf.data(), buf.size()))
+    {
+        *error = "cannot write the pack";
+        return false;
+    }
+
+    const uint64_t hd_offset = Align16(patch_ranges + buf.size());
     if (!sink_->write(hd_offset, source_.hd.data(), source_.hd.size()))
     {
         *error = "cannot write the pack";
@@ -1974,6 +2774,13 @@ bool Baker::WritePack(std::string* error)
     Wr64(header + 0x38, source_.bd_size);
     Wr64(header + 0x40, pack_size);
     Wr64(header + 0x48, probes);
+    Wr64(header + 0x50, tex2d_directory);
+    Wr32(header + 0x58, (uint32_t)tex2d_.size());
+    Wr32(header + 0x5C, (uint32_t)derived.size());
+    Wr64(header + 0x60, derived_offset);
+    Wr64(header + 0x68, patch_offset);
+    Wr64(header + 0x70, patch_ranges);
+    Wr32(header + 0x78, (uint32_t)patches_.size());
 
     /// The header goes last: an interrupted bake leaves no valid pack.
     if (!sink_->write(0, header, sizeof(header)))
@@ -2076,6 +2883,11 @@ bool Baker::Run(std::string* error)
     }
 
     Progress("bake", count, count);
+
+    if (!Bake2D(error))
+    {
+        return false;
+    }
 
     if (options_.verify && !Verify(error))
     {

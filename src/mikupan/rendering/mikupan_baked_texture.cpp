@@ -41,6 +41,11 @@ struct Pack
     std::vector<TextureEntry> directory;
     std::vector<EntryOverride> entries;
     std::vector<uint32_t> entry_sectors;///< IMG_HD.BIN start sector per file
+    std::vector<uint32_t> entry_sizes;  ///< IMG_HD.BIN size per file
+    std::vector<Tex2DEntry> tex2d;
+    std::vector<Tex2DDerived> derived;
+    std::vector<PatchRecord> patches;
+    std::vector<PatchRange> patch_ranges;
     std::mutex entry_mutex;
     std::ifstream entry_file;
     std::ifstream pixel_file;
@@ -140,7 +145,11 @@ std::unique_ptr<Pack> OpenPack(std::string* why)
                  sizeof(TextureEntry))
         || !fits(h.entry_directory_offset, h.entry_count,
                  sizeof(EntryOverride))
-        || !fits(h.probe_offset, h.entry_count, sizeof(EntryProbe)))
+        || !fits(h.probe_offset, h.entry_count, sizeof(EntryProbe))
+        || !fits(h.tex2d_directory_offset, h.tex2d_count, sizeof(Tex2DEntry))
+        || !fits(h.derived_offset, h.derived_count, sizeof(Tex2DDerived))
+        || !fits(h.patch_offset, h.patch_count, sizeof(PatchRecord))
+        || !fits(h.patch_range_offset, h.entry_count, sizeof(PatchRange)))
     {
         *why = "the texture pack is damaged";
         return nullptr;
@@ -211,6 +220,7 @@ std::unique_ptr<Pack> OpenPack(std::string* why)
     void* bd = MikuPan_OpenDataFile("IMG_BD.BIN");
     bool same_data = bd != nullptr;
     pack->entry_sectors.resize(h.entry_count);
+    pack->entry_sizes.resize(h.entry_count);
 
     for (uint32_t i = 0; i < h.entry_count; i++)
     {
@@ -219,6 +229,7 @@ std::unique_ptr<Pack> OpenPack(std::string* why)
         std::memcpy(&sector, &hd[i * 8], 4);
         std::memcpy(&size, &hd[i * 8 + 4], 4);
         pack->entry_sectors[i] = sector;
+        pack->entry_sizes[i] = size;
 
         const EntryOverride& o = pack->entries[i];
         if (o.size == 0)
@@ -249,6 +260,68 @@ std::unique_ptr<Pack> OpenPack(std::string* why)
     {
         *why = "the texture pack was baked from another IMG_BD.BIN";
         return nullptr;
+    }
+
+    /// 2D textures: the directory, the derived textures and the stamps.
+    pack->tex2d.resize(h.tex2d_count);
+    pack->derived.resize(h.derived_count);
+    pack->patches.resize(h.patch_count);
+    pack->patch_ranges.resize(h.entry_count);
+
+    if (!ReadAt(pack->pixel_file, h.tex2d_directory_offset, pack->tex2d.data(),
+                pack->tex2d.size() * sizeof(Tex2DEntry))
+        || !ReadAt(pack->pixel_file, h.derived_offset, pack->derived.data(),
+                   pack->derived.size() * sizeof(Tex2DDerived))
+        || !ReadAt(pack->pixel_file, h.patch_offset, pack->patches.data(),
+                   pack->patches.size() * sizeof(PatchRecord))
+        || !ReadAt(pack->pixel_file, h.patch_range_offset,
+                   pack->patch_ranges.data(),
+                   pack->patch_ranges.size() * sizeof(PatchRange)))
+    {
+        *why = "the texture pack is damaged";
+        return nullptr;
+    }
+
+    for (const Tex2DEntry& e : pack->tex2d)
+    {
+        if (e.width == 0 || e.height == 0 || e.width > 4096 || e.height > 4096
+            || (e.offset != 0
+                && e.offset + (uint64_t)e.width * e.height * 4 > file_size)
+            || (uint64_t)e.derived_first + e.derived_count > h.derived_count)
+        {
+            *why = "the texture pack is damaged";
+            return nullptr;
+        }
+    }
+
+    for (const Tex2DDerived& d : pack->derived)
+    {
+        if (d.id >= h.tex2d_count || pack->tex2d[d.id].offset == 0)
+        {
+            *why = "the texture pack is damaged";
+            return nullptr;
+        }
+    }
+
+    for (uint32_t i = 0; i < h.entry_count; i++)
+    {
+        const PatchRange& r = pack->patch_ranges[i];
+
+        if ((uint64_t)r.first + r.count > h.patch_count)
+        {
+            *why = "the texture pack is damaged";
+            return nullptr;
+        }
+
+        for (uint32_t k = 0; k < r.count; k++)
+        {
+            if ((uint64_t)pack->patches[r.first + k].offset + 16
+                > pack->entry_sizes[i])
+            {
+                *why = "the texture pack is damaged";
+                return nullptr;
+            }
+        }
     }
 
     pack->entry_file.open(path, std::ios::binary);
@@ -459,7 +532,8 @@ int MikuPan_BakedTexture_Prepare(void)
     {
         g_textures.assign(g_pack->header.texture_count, 0);
         g_state = MIKUPAN_BAKE_READY;
-        spdlog::info("Texture pack loaded: {} textures", g_textures.size());
+        spdlog::info("Texture pack loaded: {} textures, {} 2D textures",
+                     g_textures.size(), g_pack->tex2d.size());
         return 1;
     }
 
@@ -470,7 +544,7 @@ int MikuPan_BakedTexture_Prepare(void)
         return 0;
     }
 
-    spdlog::info("Baking the model textures ({})", why);
+    spdlog::info("Baking the textures ({})", why);
     StartBake();
     return 0;
 }
@@ -538,6 +612,37 @@ int MikuPan_BakedTexture_ReadEntry(int file_no, unsigned int start_sector,
     return ReadAt(pack->entry_file, o.offset + (uint64_t)delta, dst, size)
                ? 1
                : 0;
+}
+
+void MikuPan_BakedTexture_StampEntry(int file_no, unsigned int start_sector,
+                                     unsigned int size, void* dst)
+{
+    const Pack* pack = g_pack.get();
+
+    if (pack == nullptr || file_no < 0
+        || (size_t)file_no >= pack->patch_ranges.size() || dst == nullptr)
+    {
+        return;
+    }
+
+    const PatchRange& r = pack->patch_ranges[file_no];
+    const int64_t delta =
+        ((int64_t)start_sector - pack->entry_sectors[file_no]) * kSectorSize;
+    uint8_t* bytes = (uint8_t*)dst;
+
+    for (uint32_t k = 0; k < r.count; k++)
+    {
+        const PatchRecord& p = pack->patches[r.first + k];
+        const int64_t at = (int64_t)p.offset - delta;
+
+        /// Only over the bytes the bake saw: a loose file that replaces the
+        /// entry keeps its own data.
+        if (at >= 0 && at + 16 <= (int64_t)size
+            && std::memcmp(bytes + at, p.before, 16) == 0)
+        {
+            std::memcpy(bytes + at, p.after, 16);
+        }
+    }
 }
 
 void MikuPan_BakedTexture_BindMesh(const void* slot)
@@ -682,3 +787,51 @@ void MikuPan_BakedTexture_Shutdown(void)
 }
 
 }// extern "C"
+
+namespace MikuPanBakedTexture2D
+{
+
+uint32_t Count()
+{
+    return g_pack != nullptr ? (uint32_t)g_pack->tex2d.size() : 0;
+}
+
+const Tex2DEntry* Entry(uint32_t id)
+{
+    return id < Count() ? &g_pack->tex2d[id] : nullptr;
+}
+
+const Tex2DDerived* Derived(uint32_t index)
+{
+    return g_pack != nullptr && index < g_pack->derived.size()
+               ? &g_pack->derived[index]
+               : nullptr;
+}
+
+bool ReadPixels(uint32_t id, std::vector<uint8_t>* out)
+{
+    const Tex2DEntry* e = Entry(id);
+
+    if (e == nullptr || e->offset == 0)
+    {
+        return false;
+    }
+
+    out->resize((size_t)e->width * e->height * 4);
+
+    if (!ReadAt(g_pack->pixel_file, e->offset, out->data(), out->size()))
+    {
+        if (!g_reported_read)
+        {
+            spdlog::error("Cannot read 2D texture {} from the texture pack",
+                          id);
+            g_reported_read = true;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+}// namespace MikuPanBakedTexture2D

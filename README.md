@@ -35,9 +35,9 @@ The executable will be located at `{CMake-Build-Directory}/MikuPan`.
 
 ![logo](extern/required-files.png)
 
-On first launch MikuPan converts the model textures of these files once (a few
-seconds) into `IMG_TEX.BIN` next to its configuration; the game data itself is
-not modified. Delete `IMG_TEX.BIN` to convert again.
+On first launch MikuPan converts the model and 2D textures of these files once
+(a few seconds) into `IMG_TEX.BIN` next to its configuration; the game data
+itself is not modified. Delete `IMG_TEX.BIN` to convert again.
 
 Optionally, run [sgdstitch](tools/sgdstitch/README.md) on the two files to merge
 the small PS2-sized mesh batches of the 3D models: characters need about half

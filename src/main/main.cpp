@@ -23,7 +23,6 @@
 #include "iop/iopmain.h"
 #include "mikupan/io/mikupan_controller.h"
 #include "mikupan/io/mikupan_file_c.h"
-#include "mikupan/gs/mikupan_texture_manager_c.h"
 #include "mikupan/ui/mikupan_ui.h"
 #include "os/eeiop/se_cmd.h"
 
@@ -70,8 +69,8 @@ static int MikuPan_TryInitializeGame(void)
     mikupan_missing_data_file[0] = '\0';
     mikupan_missing_data_prompted = 0;
 
-    /// Model textures come from the texture pack, baked from the user's data
-    /// on first launch.
+    /// Model and 2D textures come from the texture pack, baked from the
+    /// user's data on first launch.
     if (!MikuPan_BakedTexture_Prepare())
     {
         return 0;
@@ -136,8 +135,6 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     MikuPan_Clear();
     MikuPan_StartFrameUi();
     MikuPan_LegacyMouseBeginFrame();
-
-    MikuPan_FlushTextureCache();
 
     if (!mikupan_game_initialized)
     {

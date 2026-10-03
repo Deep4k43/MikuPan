@@ -1,12 +1,12 @@
 #ifndef MIKUPAN_BAKED_TEXTURE_H
 #define MIKUPAN_BAKED_TEXTURE_H
 
-/// Baked model textures (IMG_TEX.BIN, see src/mikupan/bake/
+/// Baked textures (IMG_TEX.BIN, see src/mikupan/bake/
 /// mikupan_bake_format.h). The pack is baked from the user's data on first
 /// launch and kept next to the configuration. The archive entries it
 /// rewrote are served from the pack, and every mesh names its texture by an
-/// id: binding one is an array index. Model textures never touch the
-/// emulated GS.
+/// id: binding one is an array index. The 2D pictures get their ids stamped
+/// into their headers as their files load (mikupan_texture_slots.h).
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,6 +37,12 @@ void MikuPan_BakedTexture_Retry(void);
 int MikuPan_BakedTexture_ReadEntry(int file_no, unsigned int start_sector,
                                    unsigned int size, void *dst);
 
+/// CDVD loader, after any read of archive entry `file_no`: writes the 2D
+/// texture ids into the headers of its TIM2 pictures (MikuPanBake::Tim2Stamp)
+/// where the bytes are still the ones the bake saw.
+void MikuPan_BakedTexture_StampEntry(int file_no, unsigned int start_sector,
+                                     unsigned int size, void *dst);
+
 /// Mesh bind sites: binds the texture a mesh texture slot (the 16 data bytes
 /// of its A+D packet) names. kNoTexture keeps the current binding.
 void MikuPan_BakedTexture_BindMesh(const void *slot);
@@ -56,6 +62,22 @@ void MikuPan_BakedTexture_Shutdown(void);
 
 #ifdef __cplusplus
 }
+
+#include "mikupan/bake/mikupan_bake_format.h"
+
+#include <cstdint>
+#include <vector>
+
+/// The 2D part of the pack, for the texture slots.
+namespace MikuPanBakedTexture2D
+{
+/// 2D texture ids are 0..Count()-1.
+uint32_t Count();
+const MikuPanBake::Tex2DEntry* Entry(uint32_t id);
+const MikuPanBake::Tex2DDerived* Derived(uint32_t index);
+/// The stored pixels of an id whose Tex2DEntry::offset is not 0.
+bool ReadPixels(uint32_t id, std::vector<uint8_t>* out);
+}// namespace MikuPanBakedTexture2D
 #endif
 
 #endif// MIKUPAN_BAKED_TEXTURE_H

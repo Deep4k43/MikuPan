@@ -86,11 +86,11 @@ sgdstitch file m000_miku.mdl m000_miku.stitched.mdl                        # one
 
 ## Texture baking (`bake`)
 
-MikuPan no longer feeds model textures through its PS2 GS emulation. On first
-launch it decodes every model texture once into `IMG_TEX.BIN` (about 200 MB,
-next to `mikupan.ini`), and each mesh names its texture by id. The baker is a
-library shared with the game (`src/mikupan/bake/`); this mode runs the same
-bake offline:
+MikuPan no longer feeds textures through a PS2 GS emulation. On first launch
+it decodes every model texture once into `IMG_TEX.BIN` (about 200 MB, next to
+`mikupan.ini`): each mesh names its texture by id, and so does each TIM2
+picture of the 2D files. The baker is a library shared with the game
+(`src/mikupan/bake/`); this mode runs the same bake offline:
 
 ```bash
 sgdstitch bake IMG_HD.BIN IMG_BD.BIN --names src/os/eeiop/cdvd/fnameee.h --out baked
@@ -101,7 +101,8 @@ pack holds the decoded images and every archive entry the bake rewrote (same
 size, nothing moved); the game reads those entries from the pack, so
 `IMG_BD.BIN` itself is never modified. `--archive` also writes
 `baked/IMG_HD.BIN` and a patched `baked/IMG_BD.BIN` for offline tools.
-`--names` is required (it selects the model files and the player costumes).
+`--names` is required (it selects the model files, the player costumes and
+the 2D files).
 `--stamp <n>` gives reproducible output; `--no-verify` skips the read-back
 check.
 
@@ -112,6 +113,17 @@ mikupan_gs_memory.cpp`). It then checks every mesh, for every animation
 frame, costume and black & white variant, against the pack it wrote. Black &
 white mode becomes a shader flag; the bake fails if a black & white CLUT is
 not gray(colour) within 1.
+
+The 2D files (menus, HUD, fonts, effects; TIM2 files and pk2s of them) get a
+2D texture id per picture. The pack holds 16-byte stamps that the game
+writes into each picture header, in bytes it never reads, as the file loads
+(`--archive` writes them into the patched `IMG_BD.BIN`). The game then
+decodes a picture from its own data the first time it is drawn, without GS
+memory (`src/mikupan/bake/mikupan_tim2.cpp`). Textures that show more than
+one picture's data are stored as pixels: the few pictures whose TEX0 covers
+other pictures, and the textures the game draws from inside other pictures
+(message box, button icons, a number font, the title letters). The bake
+checks every one against the GS decode of its file.
 
 Stitch after baking, if at all: `sgdstitch archive` on a baked archive treats
 the baked texture slots like any other A+D packet.
