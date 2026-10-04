@@ -186,6 +186,14 @@ void MikuPan_GPUUploadTextureRGBA8(unsigned int id, int width, int height,
                                    const void *pixels, int pitch);
 int MikuPan_GPUReadTextureRGBA8(unsigned int texture_id, int width, int height,
                                 unsigned char *out_rgba);
+/// Scale a region of one texture onto the top-left dst_w x dst_h of another
+/// (a render texture), nearest filter, every channel copied as is. Recorded
+/// into the frame's command buffer. Returns 0 if either texture is unknown or
+/// the region does not fit.
+int MikuPan_GPUBlitTextureRegion(unsigned int src_texture_id, int src_x,
+                                 int src_y, int src_w, int src_h,
+                                 unsigned int dst_texture_id, int dst_w,
+                                 int dst_h);
 int MikuPan_GPUReadTextureR8(unsigned int texture_id, int size,
                              unsigned char *out_r8);
 
