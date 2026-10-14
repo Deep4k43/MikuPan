@@ -5,8 +5,52 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  BUILD_TYPE: Release
+
 jobs:
+  shaders:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up MSYS2 (Windows)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: Build shaders (Windows / MinGW)
+        shell: msys2 {0}
+        run: |
+          git config --global --add safe.directory '*'
+          cmake -E remove_directory resources/shaders/dxil
+          cmake -E remove_directory resources/shaders/msl
+          cmake -E remove_directory resources/shaders/spirv
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DMIKUPAN_COMPILE_SHADERS=ON
+          cmake --build build --target compile_shaders
+
+      - name: Upload compiled shaders
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-shaders-android
+          if-no-files-found: error
+          path: |
+            resources/shaders/dxil
+            resources/shaders/msl
+            resources/shaders/spirv
+
   build-android:
+    needs: shaders
     runs-on: ubuntu-latest
 
     steps:
@@ -15,6 +59,12 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Download compiled shaders
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-shaders-android
+          path: resources/shaders
 
       - name: Set up Java JDK 17
         uses: actions/setup-java@v4
@@ -25,7 +75,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build glslang-tools glslc
+          sudo apt-get install -y ninja-build zip pkg-config cmake
 
       - name: Set up Android SDK & NDK
         uses: android-actions/setup-android@v3
@@ -34,16 +84,17 @@ jobs:
 
       - name: Configure CMake with Android NDK
         run: |
+          ANDROID_NDK_PATH=$(ls -d $ANDROID_HOME/ndk/* | tail -n 1)
           cmake -B cmake-build-android-arm64 \
             -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_PATH/build/cmake/android.toolchain.cmake" \
             -DSDL_ANDROID_HOME="$ANDROID_HOME" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-21 \
             -DANDROID_STL=c++_static \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_EU_VERSION=OFF \
-            -DMIKUPAN_COMPILE_SHADERS=ON
+            -DMIKUPAN_COMPILE_SHADERS=OFF
 
       - name: Build MikuPan APK
         run: |
