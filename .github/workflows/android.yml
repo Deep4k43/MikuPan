@@ -25,7 +25,7 @@ jobs:
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build
+          sudo apt-get install -y ninja-build glslang-tools glslc
 
       - name: Set up Android SDK & NDK
         uses: android-actions/setup-android@v3
@@ -42,7 +42,8 @@ jobs:
             -DANDROID_PLATFORM=android-21 \
             -DANDROID_STL=c++_static \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_EU_VERSION=OFF
+            -DBUILD_EU_VERSION=OFF \
+            -DMIKUPAN_COMPILE_SHADERS=ON
 
       - name: Build MikuPan APK
         run: |
